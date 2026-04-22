@@ -2,6 +2,9 @@ name: Build
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - "v*"
 
 permissions:
   contents: write
@@ -20,6 +23,15 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install frontend dependencies
+        run: bun install
+
+      - name: Build frontend
+        run: bun run build
 
       - name: Cache cargo registry
         uses: actions/cache@v5
@@ -40,34 +52,37 @@ jobs:
       - name: Cache target directory
         uses: actions/cache@v5
         with:
-          path: target
+          path: src-tauri/target
           key: ${{ runner.os }}-cargo-target-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-target-
 
       - name: Build release binary
+        working-directory: src-tauri
         run: cargo build --release
 
       - name: Get project name
         id: project_name
         shell: pwsh
+        working-directory: src-tauri
         run: |
           $name = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json | Select-Object -ExpandProperty packages | Select-Object -First 1 | Select-Object -ExpandProperty name
           "name=$name" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           New-Item -ItemType Directory -Force release-package | Out-Null
           Copy-Item "target/release/$name$env:BINARY_EXT" -Destination release-package/
-          Copy-Item "README.md" -Destination release-package/
-          if (Test-Path "example-go") { Copy-Item -Recurse "example-go" -Destination release-package/ }
+          Copy-Item "../README.md" -Destination release-package/
+          if (Test-Path "../example-go") { Copy-Item -Recurse "../example-go" -Destination release-package/ }
           Compress-Archive -Path release-package/* -DestinationPath "$name-${{ github.ref_name }}-$env:ARTIFACT_NAME.$env:ZIP_EXT"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.project_name.outputs.name }}-${{ env.ARTIFACT_NAME }}
-          path: ${{ steps.project_name.outputs.name }}-${{ github.ref_name }}-${{ env.ARTIFACT_NAME }}.${{ env.ZIP_EXT }}
+          path: src-tauri/${{ steps.project_name.outputs.name }}-${{ github.ref_name }}-${{ env.ARTIFACT_NAME }}.${{ env.ZIP_EXT }}
 
   release:
     needs: build
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
@@ -81,6 +96,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ github.ref_name }}
           files: |
             artifacts/**/*.zip
           body: |
